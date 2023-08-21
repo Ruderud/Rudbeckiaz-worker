@@ -16,6 +16,12 @@ router.post('/api/todos', async (request) => {
 	return new Response('Creating Todo: ' + JSON.stringify(content));
 });
 
+router.post('/api/webrtc', async (request) => {
+	const content = await request.json();
+
+	return;
+});
+
 // 404 for everything else
 router.all('*', () => new Response('Not Found.', { status: 404 }));
 

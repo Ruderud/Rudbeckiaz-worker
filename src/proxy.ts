@@ -15,7 +15,8 @@ export default {
 		// optionally, modify the respone
 		if (modify) {
 			res = new Response(res.body, res);
-			res.headers.set('X-My-Header', 'My Header Value');
+			res.headers.delete('X-Frame-Options');
+			console.log('Modified response', JSON.stringify(res.headers, null, 2));
 		}
 
 		return res;
