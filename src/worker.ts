@@ -11,29 +11,113 @@
 import handleProxy from './proxy';
 import handleRedirect from './redirect';
 import apiRouter from './router';
+import template from './template';
 
-// Export a default object containing event handlers
+const optionsHandler = (request: Request) => {
+	const headers = {
+		'Access-Control-Allow-Origin': '*',
+		'Access-Control-Allow-Methods': '*',
+		'Access-Control-Allow-Headers': 'Content-Type',
+		'Access-Control-Max-Age': '86400',
+	};
+	return new Response(null, {
+		headers: headers,
+	});
+};
+
+async function handleErrors(request: Request, handler: Function) {
+	try {
+		return await handler();
+	} catch (err) {
+		if (request.headers.get('Upgrade') == 'websocket') {
+			// Annoyingly, if we return an HTTP error in response to a WebSocket request, Chrome devtools
+			// won't show us the response body! So... let's send a WebSocket response with an error
+			// frame instead.
+			let pair = new WebSocketPair();
+			pair[1].accept();
+			if (err instanceof Error) {
+				pair[1].send(JSON.stringify({ error: err.stack }));
+			} else {
+				pair[1].send(JSON.stringify({ error: err }));
+			}
+			pair[1].close(1011, 'Uncaught exception during session setup');
+			return new Response(null, { status: 101, webSocket: pair[0] });
+		} else {
+			if (err instanceof Error) {
+				return new Response(err.stack, { status: 500 });
+			} else {
+				return new Response(JSON.stringify({ error: err }), { status: 500 });
+			}
+		}
+	}
+}
+
+let count = 0;
+
 export default {
-	// The fetch handler is invoked when this worker receives a HTTP(S) request
-	// and should return a Response (optionally wrapped in a Promise)
 	async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-		// You'll find it helpful to parse the request.url string into a URL object. Learn more at https://developer.mozilla.org/en-US/docs/Web/API/URL
-		const url = new URL(request.url);
-
-		// You can get pretty far with simple logic like if/switch-statements
-		switch (url.pathname) {
-			case '/redirect':
-				return handleRedirect.fetch(request, env, ctx);
-
-			case '/proxy':
-				return handleProxy.fetch(request, env, ctx);
+		try {
+			// let id = env.EXAMPLE_CLASS.idFromName(new URL(request.url).pathname);
+			if (request.method === 'OPTIONS') {
+				return optionsHandler(request);
+			}
+			const url = new URL(request.url);
+			switch (url.pathname) {
+				case '/':
+					return template();
+				case '/api':
+					return apiRouter.handle(request, env, ctx);
+				case '/redirect':
+					return handleRedirect.fetch(request, env, ctx);
+				case '/proxy':
+					return handleProxy.fetch(request, env, ctx);
+				case '/ws':
+					return websocketHandler(request);
+				default:
+					return new Response('Not found', { status: 404 });
+			}
+		} catch (err) {
+			return err instanceof Error ? new Response(err.toString()) : new Response(JSON.stringify(err));
 		}
-
-		if (url.pathname.startsWith('/api/')) {
-			// You can also use more robust routing
-			return apiRouter.handle(request);
-		}
-
-		return new Response('Not exist', { headers: { 'Content-Type': 'text' } });
 	},
 };
+
+function handleSession(websocket: WebSocket) {
+	websocket.accept();
+	websocket.addEventListener('message', async ({ data }) => {
+		if (data === 'CLICK') {
+			count += 1;
+			websocket.send(JSON.stringify({ count, tz: new Date() }));
+		} else {
+			// An unknown message came into the server. Send back an error message
+			websocket.send(JSON.stringify({ error: 'Unknown message received', tz: new Date() }));
+		}
+	});
+
+	websocket.addEventListener('close', async (evt) => {
+		// Handle when a client closes the WebSocket connection
+		console.log(evt);
+	});
+}
+
+const websocketHandler = (request: Request) => {
+	const upgradeHeader = request.headers.get('Upgrade');
+	if (upgradeHeader !== 'websocket') {
+		return new Response('Expected websocket', { status: 400 });
+	}
+
+	const [client, server] = Object.values(new WebSocketPair());
+	handleSession(server);
+
+	return new Response(null, {
+		status: 101,
+		webSocket: client,
+	});
+};
+
+// export class DurableObjectExample {
+// 	constructor(state, env) {}
+// 	async fetch(request) {
+// 		return new Response('Hello World');
+// 	}
+// }
